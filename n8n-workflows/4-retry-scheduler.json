@@ -1,0 +1,769 @@
+{
+  "name": "4-Retry-Scheduler",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "name": "Schedule - Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "tableId": "failed_payments",
+        "returnAll": false,
+        "limit": 50,
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": [
+          {
+            "field": "status",
+            "operator": "eq",
+            "value": "pending"
+          },
+          {
+            "field": "next_retry_at",
+            "operator": "lte",
+            "value": "={{ $now.toISO() }}"
+          }
+        ],
+        "options": {
+          "sort": [
+            {
+              "field": "created_at",
+              "direction": "asc"
+            }
+          ]
+        }
+      },
+      "name": "Get Payments Due for Retry",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [450, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "name": "Loop Through Payments",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.stripe.com/v1/payment_intents/{{ $json.stripe_payment_intent_id }}/confirm",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"payment_method\": \"{{ $json.payment_method_id }}\"\n}",
+        "options": {
+          "allowUnauthorizedCerts": false,
+          "batching": {
+            "batch": {}
+          },
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "name": "Attempt Stripe Retry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 300],
+      "credentials": {
+        "stripeApi": {
+          "id": "1",
+          "name": "Stripe API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.statusCode }}",
+              "operation": "equal",
+              "value2": 200
+            }
+          ]
+        }
+      },
+      "name": "Retry Successful?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "failed_payments",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": [
+          {
+            "field": "id",
+            "operator": "eq",
+            "value": "={{ $('Loop Through Payments').item.json.id }}"
+          }
+        ],
+        "options": {}
+      },
+      "name": "Mark as Recovered",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1250, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2",
+          "name": "Supabase API"
+        }
+      },
+      "executeOnce": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "value": "recovered",
+              "type": "string"
+            },
+            {
+              "id": "recovered_at",
+              "name": "recovered_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set Recovery Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "retry_attempts",
+        "options": {}
+      },
+      "name": "Log Success Attempt",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1450, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "failed_payment_id",
+              "name": "failed_payment_id",
+              "value": "={{ $('Loop Through Payments').item.json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "retry_number",
+              "name": "retry_number",
+              "value": "={{ $('Loop Through Payments').item.json.retry_count + 1 }}",
+              "type": "number"
+            },
+            {
+              "id": "success",
+              "name": "success",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "stripe_charge_id",
+              "name": "stripe_charge_id",
+              "value": "={{ $json.body.latest_charge }}",
+              "type": "string"
+            },
+            {
+              "id": "attempted_at",
+              "name": "attempted_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Prepare Success Log",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [1250, 100]
+    },
+    {
+      "parameters": {
+        "functionCode": "const payment = $('Loop Through Payments').item.json;\nconst amountFormatted = (payment.amount / 100).toFixed(2);\n\nreturn {\n  json: {\n    to: payment.customer_email,\n    subject: 'Payment Successful!',\n    html: `\n      <div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;\">\n        <h2>Hi ${payment.customer_name},</h2>\n        \n        <p style=\"color: #28a745; font-weight: bold;\">✓ Good news! We successfully processed your payment of $${amountFormatted}.</p>\n        \n        <p>Your account is now up to date. Thank you for taking care of this!</p>\n        \n        <p>If you have any questions, feel free to reach out.</p>\n        \n        <p>Best regards,<br>Your Company Team</p>\n      </div>\n    `\n  }\n};"
+      },
+      "name": "Prepare Success Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 200]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "name": "Send Success Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1850, 200],
+      "credentials": {
+        "smtp": {
+          "id": "4",
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO recovery_stats (date, category, total_recovered, amount_recovered)\nVALUES (\n  CURRENT_DATE,\n  '{{ $('Loop Through Payments').item.json.failure_category }}',\n  1,\n  {{ $('Loop Through Payments').item.json.amount }}\n)\nON CONFLICT (date, category)\nDO UPDATE SET\n  total_recovered = recovery_stats.total_recovered + 1,\n  amount_recovered = recovery_stats.amount_recovered + {{ $('Loop Through Payments').item.json.amount }};",
+        "options": {}
+      },
+      "name": "Update Recovery Stats",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2050, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "retry_attempts",
+        "options": {}
+      },
+      "name": "Log Failed Attempt",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1450, 400],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "failed_payment_id",
+              "name": "failed_payment_id",
+              "value": "={{ $('Loop Through Payments').item.json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "retry_number",
+              "name": "retry_number",
+              "value": "={{ $('Loop Through Payments').item.json.retry_count + 1 }}",
+              "type": "number"
+            },
+            {
+              "id": "success",
+              "name": "success",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "failure_reason",
+              "name": "failure_reason",
+              "value": "={{ $json.body.error?.message || 'Unknown error' }}",
+              "type": "string"
+            },
+            {
+              "id": "attempted_at",
+              "name": "attempted_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Prepare Failed Log",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [1250, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $('Loop Through Payments').item.json.retry_count + 1 }}",
+              "operation": "smaller",
+              "value2": "={{ $('Loop Through Payments').item.json.max_retries }}"
+            }
+          ]
+        }
+      },
+      "name": "More Retries Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1650, 400]
+    },
+    {
+      "parameters": {
+        "functionCode": "const payment = $('Loop Through Payments').item.json;\nconst retryCount = payment.retry_count + 1;\nconst category = payment.failure_category;\n\nlet hoursToAdd;\n\nif (category === 'insufficient_funds') {\n  // Retry schedule: 48h, then +3d (120h total), then +2d (168h total)\n  if (retryCount === 1) {\n    hoursToAdd = 72; // 3 more days (total 5 days)\n  } else if (retryCount === 2) {\n    hoursToAdd = 48; // 2 more days (total 7 days)\n  }\n} else if (category === 'expired_card') {\n  hoursToAdd = 24; // 1 day\n} else {\n  hoursToAdd = 72; // 3 days for other\n}\n\nconst nextRetryDate = new Date(Date.now() + (hoursToAdd * 60 * 60 * 1000));\n\nreturn {\n  json: {\n    retry_count: retryCount,\n    next_retry_at: nextRetryDate.toISOString(),\n    status: 'pending'\n  }\n};"
+      },
+      "name": "Calculate Next Retry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 350]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "failed_payments",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": [
+          {
+            "field": "id",
+            "operator": "eq",
+            "value": "={{ $('Loop Through Payments').item.json.id }}"
+          }
+        ],
+        "options": {}
+      },
+      "name": "Schedule Next Retry",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2050, 350],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "value": "failed",
+              "type": "string"
+            },
+            {
+              "id": "retry_count",
+              "name": "retry_count",
+              "value": "={{ $('Loop Through Payments').item.json.retry_count + 1 }}",
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set Failed Status",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [1850, 500]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "failed_payments",
+        "filterType": "manual",
+        "matchType": "allFilters",
+        "filters": [
+          {
+            "field": "id",
+            "operator": "eq",
+            "value": "={{ $('Loop Through Payments').item.json.id }}"
+          }
+        ],
+        "options": {}
+      },
+      "name": "Mark as Permanently Failed",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2050, 500],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const payment = $('Loop Through Payments').item.json;\nconst amountFormatted = (payment.amount / 100).toFixed(2);\nconst customerPortalLink = `https://billing.stripe.com/p/login/test_YOUR_LINK_HERE`;\nconst supportEmail = 'support@yourcompany.com';\n\nreturn {\n  json: {\n    to: payment.customer_email,\n    subject: 'Action Required: Payment Failed',\n    html: `\n      <div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;\">\n        <h2>Hi ${payment.customer_name},</h2>\n        \n        <p>We've attempted to process your payment of $${amountFormatted} multiple times but weren't successful.</p>\n        \n        <p style=\"background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 5px;\">\n          <strong>⚠️ To avoid service disruption, please update your payment method immediately:</strong>\n        </p>\n        \n        <div style=\"text-align: center; margin: 30px 0;\">\n          <a href=\"${customerPortalLink}\" style=\"background-color: #dc3545; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;\">Update Payment Method</a>\n        </div>\n        \n        <p>Or contact us for assistance: ${supportEmail}</p>\n        \n        <p>Best regards,<br>Your Company Team</p>\n      </div>\n    `\n  }\n};"
+      },
+      "name": "Prepare Final Failure Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 500]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "name": "Send Final Failure Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [2450, 500],
+      "credentials": {
+        "smtp": {
+          "id": "4",
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO recovery_stats (date, category, total_permanent_failed, amount_lost)\nVALUES (\n  CURRENT_DATE,\n  '{{ $('Loop Through Payments').item.json.failure_category }}',\n  1,\n  {{ $('Loop Through Payments').item.json.amount }}\n)\nON CONFLICT (date, category)\nDO UPDATE SET\n  total_permanent_failed = recovery_stats.total_permanent_failed + 1,\n  amount_lost = recovery_stats.amount_lost + {{ $('Loop Through Payments').item.json.amount }};",
+        "options": {}
+      },
+      "name": "Update Failed Stats",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2650, 500],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "={{ $env.SLACK_ALERT_CHANNEL }}",
+        "text": "=⚠️ *Payment Permanently Failed*\n\nCustomer: {{ $('Loop Through Payments').item.json.customer_name }}\nEmail: {{ $('Loop Through Payments').item.json.customer_email }}\nAmount: ${{ $('Loop Through Payments').item.json.amount / 100 }}\nRetries: {{ $('Loop Through Payments').item.json.max_retries }}\n\nRequires manual follow-up.",
+        "otherOptions": {}
+      },
+      "name": "Alert Team",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [2850, 500],
+      "credentials": {
+        "slackApi": {
+          "id": "3",
+          "name": "Slack API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule - Every Hour": {
+      "main": [
+        [
+          {
+            "node": "Get Payments Due for Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Payments Due for Retry": {
+      "main": [
+        [
+          {
+            "node": "Loop Through Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Through Payments": {
+      "main": [
+        [
+          {
+            "node": "Attempt Stripe Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attempt Stripe Retry": {
+      "main": [
+        [
+          {
+            "node": "Retry Successful?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retry Successful?": {
+      "main": [
+        [
+          {
+            "node": "Set Recovery Data",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare Success Log",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Failed Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Recovery Data": {
+      "main": [
+        [
+          {
+            "node": "Mark as Recovered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as Recovered": {
+      "main": [
+        [
+          {
+            "node": "Prepare Success Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Success Log": {
+      "main": [
+        [
+          {
+            "node": "Log Success Attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Success Email": {
+      "main": [
+        [
+          {
+            "node": "Send Success Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Success Email": {
+      "main": [
+        [
+          {
+            "node": "Update Recovery Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Recovery Stats": {
+      "main": [
+        [
+          {
+            "node": "Loop Through Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Failed Log": {
+      "main": [
+        [
+          {
+            "node": "Log Failed Attempt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Failed Attempt": {
+      "main": [
+        [
+          {
+            "node": "More Retries Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "More Retries Available?": {
+      "main": [
+        [
+          {
+            "node": "Calculate Next Retry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Failed Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Next Retry": {
+      "main": [
+        [
+          {
+            "node": "Schedule Next Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Next Retry": {
+      "main": [
+        [
+          {
+            "node": "Loop Through Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Failed Status": {
+      "main": [
+        [
+          {
+            "node": "Mark as Permanently Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark as Permanently Failed": {
+      "main": [
+        [
+          {
+            "node": "Prepare Final Failure Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Final Failure Email": {
+      "main": [
+        [
+          {
+            "node": "Send Final Failure Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Final Failure Email": {
+      "main": [
+        [
+          {
+            "node": "Update Failed Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Failed Stats": {
+      "main": [
+        [
+          {
+            "node": "Alert Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Team": {
+      "main": [
+        [
+          {
+            "node": "Loop Through Payments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
