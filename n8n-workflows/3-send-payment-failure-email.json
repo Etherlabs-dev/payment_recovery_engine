@@ -1,0 +1,267 @@
+{
+  "name": "3-Send-Payment-Failure-Email",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "send-payment-failure-email",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "name": "Webhook - Email Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "send-payment-failure-email"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.failure_category }}",
+                    "rightValue": "expired_card",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "expired_card"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.failure_category }}",
+                    "rightValue": "insufficient_funds",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "insufficient_funds"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.failure_category }}",
+                    "rightValue": "fraud_flag",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "fraud_flag"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "name": "Route by Category",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = $input.item.json;\nconst amountFormatted = (data.amount / 100).toFixed(2);\n\nconst customerPortalLink = `https://billing.stripe.com/p/login/test_YOUR_LINK_HERE`;\n\nreturn {\n  json: {\n    to: data.customer_email,\n    subject: 'Action Required: Update Your Payment Method',\n    html: `\n      <div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;\">\n        <h2>Hi ${data.customer_name},</h2>\n        \n        <p>We tried to process your payment of $${amountFormatted} but it failed because your card has expired.</p>\n        \n        <p>To avoid service interruption, please update your payment method:</p>\n        \n        <div style=\"text-align: center; margin: 30px 0;\">\n          <a href=\"${customerPortalLink}\" style=\"background-color: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;\">Update Payment Method</a>\n        </div>\n        \n        <p>We'll automatically retry your payment in 24 hours once you update your card.</p>\n        \n        <p>Questions? Reply to this email or contact support.</p>\n        \n        <p>Best regards,<br>Your Company Team</p>\n      </div>\n    `\n  }\n};"
+      },
+      "name": "Expired Card Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 100]
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = $input.item.json;\nconst amountFormatted = (data.amount / 100).toFixed(2);\n\nconst customerPortalLink = `https://billing.stripe.com/p/login/test_YOUR_LINK_HERE`;\n\nreturn {\n  json: {\n    to: data.customer_email,\n    subject: 'Payment Issue - We\\'ll Retry Soon',\n    html: `\n      <div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;\">\n        <h2>Hi ${data.customer_name},</h2>\n        \n        <p>We weren't able to process your payment of $${amountFormatted} due to insufficient funds.</p>\n        \n        <p>Don't worry - we'll automatically retry your payment in 2 days. If you'd like to retry sooner or update your payment method, you can do that here:</p>\n        \n        <div style=\"text-align: center; margin: 30px 0;\">\n          <a href=\"${customerPortalLink}\" style=\"background-color: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;\">Manage Payment</a>\n        </div>\n        \n        <p>We're here to help if you need it.</p>\n        \n        <p>Best regards,<br>Your Company Team</p>\n      </div>\n    `\n  }\n};"
+      },
+      "name": "Insufficient Funds Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 250]
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = $input.item.json;\nconst amountFormatted = (data.amount / 100).toFixed(2);\n\nconst supportEmail = 'support@yourcompany.com';\nconst supportPhone = '1-800-XXX-XXXX';\n\nreturn {\n  json: {\n    to: data.customer_email,\n    subject: 'Urgent: Payment Security Issue',\n    html: `\n      <div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;\">\n        <h2 style=\"color: #dc3545;\">Hi ${data.customer_name},</h2>\n        \n        <p>Your recent payment of $${amountFormatted} was flagged by our security systems.</p>\n        \n        <p>For your protection, we need you to verify this transaction or update to a different payment method.</p>\n        \n        <div style=\"background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 5px; margin: 20px 0;\">\n          <strong>⚠️ Please contact us immediately:</strong><br>\n          Email: ${supportEmail}<br>\n          Phone: ${supportPhone}\n        </div>\n        \n        <p>Our team is standing by to help resolve this quickly.</p>\n        \n        <p>Best regards,<br>Your Company Security Team</p>\n      </div>\n    `\n  }\n};"
+      },
+      "name": "Fraud Flag Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 400]
+    },
+    {
+      "parameters": {
+        "functionCode": "const data = $input.item.json;\nconst amountFormatted = (data.amount / 100).toFixed(2);\n\nconst customerPortalLink = `https://billing.stripe.com/p/login/test_YOUR_LINK_HERE`;\nconst supportEmail = 'support@yourcompany.com';\n\nreturn {\n  json: {\n    to: data.customer_email,\n    subject: 'Payment Issue - Action Required',\n    html: `\n      <div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;\">\n        <h2>Hi ${data.customer_name},</h2>\n        \n        <p>We had trouble processing your payment of $${amountFormatted}.</p>\n        \n        <p>Please update your payment method to avoid service interruption:</p>\n        \n        <div style=\"text-align: center; margin: 30px 0;\">\n          <a href=\"${customerPortalLink}\" style=\"background-color: #007bff; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;\">Update Payment Method</a>\n        </div>\n        \n        <p>If you continue to experience issues, please contact us at ${supportEmail}.</p>\n        \n        <p>Best regards,<br>Your Company Team</p>\n      </div>\n    `\n  }\n};"
+      },
+      "name": "Other Failure Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 550]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "name": "Send Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "credentials": {
+        "smtp": {
+          "id": "4",
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, email_sent: true } }}"
+      },
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    }
+  ],
+  "connections": {
+    "Webhook - Email Trigger": {
+      "main": [
+        [
+          {
+            "node": "Route by Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Category": {
+      "main": [
+        [
+          {
+            "node": "Expired Card Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insufficient Funds Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fraud Flag Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Other Failure Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expired Card Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insufficient Funds Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fraud Flag Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Other Failure Email": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
