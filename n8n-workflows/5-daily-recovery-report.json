@@ -1,0 +1,258 @@
+{
+  "name": "5-Daily-Recovery-Report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Schedule - Daily 9am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  failure_category,\n  COUNT(*) as total_failures,\n  SUM(CASE WHEN status = 'recovered' THEN 1 ELSE 0 END) as total_recovered,\n  SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as total_failed,\n  SUM(CASE WHEN status IN ('pending', 'retrying') THEN 1 ELSE 0 END) as pending_retries,\n  SUM(amount) FILTER (WHERE status IN ('pending', 'retrying')) as amount_at_risk,\n  SUM(amount) FILTER (WHERE status = 'recovered') as amount_recovered,\n  SUM(amount) FILTER (WHERE status = 'failed') as amount_lost,\n  ROUND(\n    (SUM(CASE WHEN status = 'recovered' THEN 1 ELSE 0 END)::DECIMAL / NULLIF(COUNT(*), 0)) * 100,\n    2\n  ) as recovery_rate_percentage\nFROM failed_payments\nWHERE DATE(created_at) = CURRENT_DATE - INTERVAL '1 day'\nGROUP BY failure_category\nORDER BY failure_category;",
+        "options": {}
+      },
+      "name": "Get Yesterday Stats",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [450, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const stats = $input.all().map(item => item.json);\n\nif (stats.length === 0) {\n  return {\n    json: {\n      date: new Date(Date.now() - 86400000).toISOString().split('T')[0],\n      totalFailures: 0,\n      totalRecovered: 0,\n      totalFailed: 0,\n      pendingRetries: 0,\n      amountRecovered: 0,\n      amountLost: 0,\n      amountAtRisk: 0,\n      overallRecoveryRate: 0,\n      byCategory: {}\n    }\n  };\n}\n\nconst totalFailures = stats.reduce((sum, s) => sum + (s.total_failures || 0), 0);\nconst totalRecovered = stats.reduce((sum, s) => sum + (s.total_recovered || 0), 0);\nconst totalFailed = stats.reduce((sum, s) => sum + (s.total_failed || 0), 0);\nconst pendingRetries = stats.reduce((sum, s) => sum + (s.pending_retries || 0), 0);\nconst amountRecovered = stats.reduce((sum, s) => sum + (s.amount_recovered || 0), 0) / 100;\nconst amountLost = stats.reduce((sum, s) => sum + (s.amount_lost || 0), 0) / 100;\nconst amountAtRisk = stats.reduce((sum, s) => sum + (s.amount_at_risk || 0), 0) / 100;\n\nconst overallRecoveryRate = totalFailures > 0 \n  ? (totalRecovered / totalFailures * 100).toFixed(2) \n  : 0;\n\nconst byCategory = {};\nstats.forEach(s => {\n  byCategory[s.failure_category] = {\n    total_failures: s.total_failures || 0,\n    total_recovered: s.total_recovered || 0,\n    total_failed: s.total_failed || 0,\n    pending_retries: s.pending_retries || 0,\n    recovery_rate: s.recovery_rate_percentage || 0,\n    amount_recovered: (s.amount_recovered || 0) / 100,\n    amount_lost: (s.amount_lost || 0) / 100,\n    amount_at_risk: (s.amount_at_risk || 0) / 100\n  };\n});\n\nreturn {\n  json: {\n    date: new Date(Date.now() - 86400000).toISOString().split('T')[0],\n    totalFailures,\n    totalRecovered,\n    totalFailed,\n    pendingRetries,\n    amountRecovered: amountRecovered.toFixed(2),\n    amountLost: amountLost.toFixed(2),\n    amountAtRisk: amountAtRisk.toFixed(2),\n    overallRecoveryRate,\n    byCategory\n  }\n};"
+      },
+      "name": "Calculate Overall Metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  id,\n  customer_name,\n  customer_email,\n  amount,\n  failure_category,\n  next_retry_at,\n  retry_count,\n  max_retries\nFROM failed_payments\nWHERE status = 'pending'\n  AND next_retry_at IS NOT NULL\nORDER BY next_retry_at ASC\nLIMIT 10;",
+        "options": {}
+      },
+      "name": "Get Pending Retries",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [850, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const metrics = $('Calculate Overall Metrics').item.json;\nconst pendingRetries = $input.all().map(item => item.json);\n\nconst expiredCard = metrics.byCategory.expired_card || {};\nconst insufficientFunds = metrics.byCategory.insufficient_funds || {};\nconst fraudFlag = metrics.byCategory.fraud_flag || {};\nconst other = metrics.byCategory.other || {};\n\nlet pendingRetriesText = '';\nif (pendingRetries.length === 0) {\n  pendingRetriesText = 'No pending retries scheduled.';\n} else {\n  pendingRetriesText = pendingRetries.map(p => {\n    const amount = (p.amount / 100).toFixed(2);\n    const retryDate = new Date(p.next_retry_at).toLocaleString();\n    return `  • ${p.customer_name} ($${amount}) - Retry ${p.retry_count + 1}/${p.max_retries} at ${retryDate}`;\n  }).join('\\n');\n}\n\nconst emailBody = `\n========================================\nDAILY PAYMENT RECOVERY REPORT\n${metrics.date}\n========================================\n\nOVERALL METRICS\n-------------------\nTotal Failures: ${metrics.totalFailures}\nSuccessfully Recovered: ${metrics.totalRecovered}\nPermanently Failed: ${metrics.totalFailed}\nPending Retries: ${metrics.pendingRetries}\n\nRecovery Rate: ${metrics.overallRecoveryRate}%\n\nAmount Recovered: $${metrics.amountRecovered}\nAmount Lost: $${metrics.amountLost}\nAmount At Risk: $${metrics.amountAtRisk}\n\n\nBY CATEGORY\n-------------------\n\n📧 EXPIRED CARD\n  Failures: ${expiredCard.total_failures || 0}\n  Recovered: ${expiredCard.total_recovered || 0}\n  Failed: ${expiredCard.total_failed || 0}\n  Pending: ${expiredCard.pending_retries || 0}\n  Rate: ${expiredCard.recovery_rate || 0}%\n  Recovered: $${expiredCard.amount_recovered || 0}\n  Lost: $${expiredCard.amount_lost || 0}\n\n💳 INSUFFICIENT FUNDS\n  Failures: ${insufficientFunds.total_failures || 0}\n  Recovered: ${insufficientFunds.total_recovered || 0}\n  Failed: ${insufficientFunds.total_failed || 0}\n  Pending: ${insufficientFunds.pending_retries || 0}\n  Rate: ${insufficientFunds.recovery_rate || 0}%\n  Recovered: $${insufficientFunds.amount_recovered || 0}\n  Lost: $${insufficientFunds.amount_lost || 0}\n\n🚨 FRAUD FLAGS\n  Failures: ${fraudFlag.total_failures || 0}\n  Manual Review: ${fraudFlag.total_failed || 0}\n  Pending Review: ${fraudFlag.pending_retries || 0}\n\n❓ OTHER\n  Failures: ${other.total_failures || 0}\n  Recovered: ${other.total_recovered || 0}\n  Failed: ${other.total_failed || 0}\n  Pending: ${other.pending_retries || 0}\n  Rate: ${other.recovery_rate || 0}%\n\n\nPENDING RETRIES (Next 10)\n-------------------\n${pendingRetriesText}\n\n========================================\n\nView full dashboard: ${process.env.DASHBOARD_URL || 'N/A'}\n\n`;\n\nreturn {\n  json: {\n    subject: `Daily Payment Recovery Report - ${metrics.date}`,\n    body: emailBody,\n    metrics: metrics\n  }\n};"
+      },
+      "name": "Format Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $env.REPORT_EMAIL }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.body }}",
+        "options": {}
+      },
+      "name": "Send Report Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1250, 300],
+      "credentials": {
+        "smtp": {
+          "id": "4",
+          "name": "Gmail SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.metrics.overallRecoveryRate }}",
+              "operation": "smaller",
+              "value2": 20
+            }
+          ]
+        }
+      },
+      "name": "Recovery Rate Too Low?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $env.SLACK_ALERT_CHANNEL }}",
+        "text": "=⚠️ *LOW RECOVERY RATE ALERT*\n\nYesterday's recovery rate: {{ $json.metrics.overallRecoveryRate }}%\nTarget: 20%+\n\nTotal failures: {{ $json.metrics.totalFailures }}\nRecovered: {{ $json.metrics.totalRecovered }}\n\nAmount at risk: ${{ $json.metrics.amountAtRisk }}\n\nAction required: Review retry strategies and payment failure patterns.",
+        "otherOptions": {}
+      },
+      "name": "Alert Low Recovery Rate",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1650, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "3",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ parseFloat($json.metrics.amountAtRisk) }}",
+              "operation": "larger",
+              "value2": 10000
+            }
+          ]
+        }
+      },
+      "name": "High Amount At Risk?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1650, 400]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $env.SLACK_ALERT_CHANNEL }}",
+        "text": "=💰 *HIGH AMOUNT AT RISK ALERT*\n\nAmount pending retry: ${{ $json.metrics.amountAtRisk }}\nThreshold: $10,000\n\nPending retries: {{ $json.metrics.pendingRetries }}\n\nRecommendation: Review pending payments and consider manual outreach for high-value customers.",
+        "otherOptions": {}
+      },
+      "name": "Alert High Risk Amount",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1850, 400],
+      "credentials": {
+        "slackApi": {
+          "id": "3",
+          "name": "Slack API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule - Daily 9am": {
+      "main": [
+        [
+          {
+            "node": "Get Yesterday Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Yesterday Stats": {
+      "main": [
+        [
+          {
+            "node": "Calculate Overall Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Overall Metrics": {
+      "main": [
+        [
+          {
+            "node": "Get Pending Retries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Pending Retries": {
+      "main": [
+        [
+          {
+            "node": "Format Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Report": {
+      "main": [
+        [
+          {
+            "node": "Send Report Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Report Email": {
+      "main": [
+        [
+          {
+            "node": "Recovery Rate Too Low?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "High Amount At Risk?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recovery Rate Too Low?": {
+      "main": [
+        [
+          {
+            "node": "Alert Low Recovery Rate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "High Amount At Risk?": {
+      "main": [
+        [
+          {
+            "node": "Alert High Risk Amount",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
