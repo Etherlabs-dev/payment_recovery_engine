@@ -1,0 +1,412 @@
+{
+  "name": "2-Process-Failed-Payment",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "process-failed-payment",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "name": "Webhook - Receive Payment Data",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "process-failed-payment"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.failure_code }}",
+                    "rightValue": "card_declined",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "expired_card"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.failure_code }}",
+                    "rightValue": "expired_card",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "expired_card2"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.failure_code }}",
+                    "rightValue": "insufficient_funds",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "insufficient_funds"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.failure_code }}",
+                    "rightValue": "do_not_honor",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "fraud_flag"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.failure_code }}",
+                    "rightValue": "fraudulent",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "or"
+              },
+              "renameOutput": true,
+              "outputKey": "fraud_flag2"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "name": "Categorize Failure",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Expired card retry strategy\nconst input = $input.item.json;\nconst now = new Date();\nconst nextRetry = new Date(now.getTime() + (24 * 60 * 60 * 1000)); // 24 hours from now\n\nreturn {\n  json: {\n    ...input,\n    failure_category: 'expired_card',\n    max_retries: 1,\n    retry_count: 0,\n    next_retry_at: nextRetry.toISOString(),\n    status: 'pending'\n  }\n};"
+      },
+      "name": "Expired Card Strategy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 100]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Insufficient funds retry strategy\nconst input = $input.item.json;\nconst now = new Date();\nconst nextRetry = new Date(now.getTime() + (48 * 60 * 60 * 1000)); // 48 hours from now\n\nreturn {\n  json: {\n    ...input,\n    failure_category: 'insufficient_funds',\n    max_retries: 3,\n    retry_count: 0,\n    next_retry_at: nextRetry.toISOString(),\n    status: 'pending'\n  }\n};"
+      },
+      "name": "Insufficient Funds Strategy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 250]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Fraud flag - no retry\nconst input = $input.item.json;\n\nreturn {\n  json: {\n    ...input,\n    failure_category: 'fraud_flag',\n    max_retries: 0,\n    retry_count: 0,\n    next_retry_at: null,\n    status: 'manual_review'\n  }\n};"
+      },
+      "name": "Fraud Flag Strategy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 400]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Other failures - single retry in 3 days\nconst input = $input.item.json;\nconst now = new Date();\nconst nextRetry = new Date(now.getTime() + (72 * 60 * 60 * 1000)); // 72 hours from now\n\nreturn {\n  json: {\n    ...input,\n    failure_category: 'other',\n    max_retries: 1,\n    retry_count: 0,\n    next_retry_at: nextRetry.toISOString(),\n    status: 'pending'\n  }\n};"
+      },
+      "name": "Other Strategy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 550]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "failed_payments",
+        "options": {
+          "queryName": "insert_failed_payment"
+        }
+      },
+      "name": "Insert to Supabase",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [850, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "2",
+          "name": "Supabase API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.N8N_HOST }}/webhook/send-payment-failure-email",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ failed_payment_id: $json.id, customer_email: $json.customer_email, customer_name: $json.customer_name, failure_category: $json.failure_category, amount: $json.amount, currency: $json.currency }) }}",
+        "options": {}
+      },
+      "name": "Trigger Email Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.failure_category }}",
+              "operation": "equals",
+              "value2": "fraud_flag"
+            }
+          ]
+        }
+      },
+      "name": "Is Fraud Flag?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $env.SLACK_ALERT_CHANNEL }}",
+        "text": "=🚨 *FRAUD ALERT*\n\nCustomer: {{ $json.customer_name }} ({{ $json.customer_email }})\nAmount: ${{ $json.amount / 100 }}\nPayment Intent: {{ $json.stripe_payment_intent_id }}\nReason: {{ $json.failure_message }}\n\nRequires manual review.",
+        "otherOptions": {}
+      },
+      "name": "Alert Team (Slack)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1450, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "3",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { success: true, failed_payment_id: $json.id } }}"
+      },
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1450, 400]
+    }
+  ],
+  "connections": {
+    "Webhook - Receive Payment Data": {
+      "main": [
+        [
+          {
+            "node": "Categorize Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Categorize Failure": {
+      "main": [
+        [
+          {
+            "node": "Expired Card Strategy",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Expired Card Strategy",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insufficient Funds Strategy",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fraud Flag Strategy",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fraud Flag Strategy",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Other Strategy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expired Card Strategy": {
+      "main": [
+        [
+          {
+            "node": "Insert to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insufficient Funds Strategy": {
+      "main": [
+        [
+          {
+            "node": "Insert to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fraud Flag Strategy": {
+      "main": [
+        [
+          {
+            "node": "Insert to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Other Strategy": {
+      "main": [
+        [
+          {
+            "node": "Insert to Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert to Supabase": {
+      "main": [
+        [
+          {
+            "node": "Trigger Email Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Email Notification": {
+      "main": [
+        [
+          {
+            "node": "Is Fraud Flag?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Fraud Flag?": {
+      "main": [
+        [
+          {
+            "node": "Alert Team (Slack)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Team (Slack)": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
