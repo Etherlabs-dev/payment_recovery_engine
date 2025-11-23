@@ -1,0 +1,226 @@
+{
+  "name": "1-Failed-Payment-Webhook-Receiver",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "stripe-payment-failed",
+        "responseMode": "lastNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "name": "Webhook - Stripe Payment Failed",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "stripe-payment-failed"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Verify Stripe webhook signature\nconst crypto = require('crypto');\n\nconst sig = $input.item.json.headers['stripe-signature'];\nconst webhookSecret = $env.STRIPE_WEBHOOK_SECRET;\nconst payload = $input.item.json.body;\n\nif (!sig || !webhookSecret) {\n  throw new Error('Missing signature or webhook secret');\n}\n\n// Parse signature\nconst sigElements = sig.split(',');\nconst timestamp = sigElements[0].split('=')[1];\nconst signature = sigElements[1].split('=')[1];\n\n// Compute expected signature\nconst signedPayload = timestamp + '.' + JSON.stringify(payload);\nconst expectedSignature = crypto\n  .createHmac('sha256', webhookSecret)\n  .update(signedPayload, 'utf8')\n  .digest('hex');\n\n// Verify signature\nif (signature !== expectedSignature) {\n  throw new Error('Invalid signature');\n}\n\n// Check timestamp (within 5 minutes)\nconst currentTime = Math.floor(Date.now() / 1000);\nif (currentTime - parseInt(timestamp) > 300) {\n  throw new Error('Timestamp too old');\n}\n\nreturn { json: payload };"
+      },
+      "name": "Verify Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.type }}",
+              "operation": "equals",
+              "value2": "payment_intent.payment_failed"
+            }
+          ]
+        }
+      },
+      "name": "Is Payment Intent Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Extract relevant payment data\nconst event = $input.item.json;\nconst paymentIntent = event.data.object;\n\nconst failureCode = paymentIntent.last_payment_error?.code || 'unknown';\nconst failureMessage = paymentIntent.last_payment_error?.message || 'Unknown error';\n\nreturn {\n  json: {\n    stripe_payment_intent_id: paymentIntent.id,\n    stripe_customer_id: paymentIntent.customer,\n    amount: paymentIntent.amount,\n    currency: paymentIntent.currency,\n    failure_code: failureCode,\n    failure_message: failureMessage,\n    payment_method_id: paymentIntent.payment_method,\n    receipt_email: paymentIntent.receipt_email,\n    metadata: paymentIntent.metadata || {}\n  }\n};"
+      },
+      "name": "Extract Payment Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.stripe.com/v1/customers/{{ $json.stripe_customer_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "stripeApi",
+        "options": {}
+      },
+      "name": "Get Customer Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1050, 200],
+      "credentials": {
+        "stripeApi": {
+          "id": "1",
+          "name": "Stripe API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Merge payment data with customer data\nconst paymentData = $('Extract Payment Data').item.json;\nconst customerData = $input.item.json;\n\nreturn {\n  json: {\n    ...paymentData,\n    customer_email: customerData.email,\n    customer_name: customerData.name || customerData.email,\n    customer_metadata: customerData.metadata || {}\n  }\n};"
+      },
+      "name": "Merge Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "mode": "webhook",
+        "method": "POST",
+        "url": "={{ $env.N8N_HOST }}/webhook/process-failed-payment",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "name": "Trigger Processing Workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1450, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"received\": true } }}"
+      },
+      "name": "Respond to Stripe",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1650, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Log ignored event\nconsole.log('Ignored event type:', $json.type);\nreturn { json: { ignored: true } };"
+      },
+      "name": "Ignore Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"received\": true, \"ignored\": true } }}"
+      },
+      "name": "Respond OK (Ignored)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1050, 400]
+    }
+  ],
+  "connections": {
+    "Webhook - Stripe Payment Failed": {
+      "main": [
+        [
+          {
+            "node": "Verify Signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Signature": {
+      "main": [
+        [
+          {
+            "node": "Is Payment Intent Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Payment Intent Failed?": {
+      "main": [
+        [
+          {
+            "node": "Extract Payment Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ignore Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Payment Data": {
+      "main": [
+        [
+          {
+            "node": "Get Customer Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Customer Details": {
+      "main": [
+        [
+          {
+            "node": "Merge Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Data": {
+      "main": [
+        [
+          {
+            "node": "Trigger Processing Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Processing Workflow": {
+      "main": [
+        [
+          {
+            "node": "Respond to Stripe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ignore Event": {
+      "main": [
+        [
+          {
+            "node": "Respond OK (Ignored)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
