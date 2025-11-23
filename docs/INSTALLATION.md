@@ -527,8 +527,8 @@ If you encounter issues:
 
 1. Check [Troubleshooting Guide](TROUBLESHOOTING.md)
 2. Review [Testing Guide](TESTING.md)
-3. [Open an issue](https://github.com/yourusername/failed-payment-recovery-engine/issues)
-4. Email: your-email@company.com
+3. [Open an issue](https://github.com/yourusername/payment-recovery-engine/issues)
+4. Email: ethercess@proton.me
 
 ---
 
