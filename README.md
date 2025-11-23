@@ -1,4 +1,4 @@
-# Failed Payment Recovery Engine
+# Payment Recovery Engine
 
 **Automated payment failure recovery system built with n8n + Supabase**
 
