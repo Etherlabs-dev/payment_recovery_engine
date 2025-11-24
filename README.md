@@ -287,9 +287,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🔗 Related Projects
 
-- [Revenue Leakage Detector](https://github.com/yourusername/revenue-leakage-detector) - Find lost revenue automatically
-- [Multi-Processor Reconciliation](https://github.com/yourusername/payment-reconciliation) - Reconcile multiple payment processors
-- [Cash Flow Forecaster](https://github.com/yourusername/cash-flow-forecaster) - Predict cash position 90 days out
+- [Revenue Leakage Detector](https://github.com/Etherlabs-dev/revenue_leakage_system) - Find lost revenue automatically
 
 ---
 
