@@ -280,8 +280,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 💬 Support
 
-- **Issues:** [GitHub Issues](https://github.com/Etherlabs-dev/payment-recovery-engine/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/Etherlabs-dev/payment-recovery-engine/discussions)
+- **Issues:** [GitHub Issues](https://github.com/Etherlabs-dev/payment_recovery_engine/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/Etherlabs-dev/payment_recovery_engine/discussions)
 - **Email:** ethercess@proton.me
 - **Twitter:** [@ChukwuAugustus](https://x.com/ChukwuAugustus)
 
