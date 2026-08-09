@@ -1,295 +1,230 @@
 # Payment Recovery Engine
 
-**Automated payment failure recovery system built with n8n + Supabase**
+> Reference implementation for classifying payment failures, applying policy-driven retry strategies, notifying customers, and tracking recovery operations.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![n8n](https://img.shields.io/badge/n8n-v1.0+-orange.svg)
-![Supabase](https://img.shields.io/badge/supabase-enabled-green.svg)
+**Status:** Reference Implementation / Validation Candidate  
+**Domain:** Payments · Revenue Recovery · Finance Operations  
+**Stack:** n8n · Supabase/PostgreSQL · Stripe webhooks · Email/Slack
 
-> Recover 20-30% more failed payments automatically with intelligent retry strategies based on failure type.
+This repository demonstrates the architecture of a failed-payment recovery system. It models how recurring-payment failures can move from a webhook event into classification, retry scheduling, customer communication, recovery tracking and operational alerting.
 
-## 🎯 The Problem
-
-5-10% of recurring payments fail every month. Most companies retry once (wrong approach) or manually chase customers (doesn't scale). Each failed payment means:
-- Lost MRR
-- Potential churn
-- Wasted manual effort
-- Poor customer experience
-
-**Result:** Companies lose 8-12% of failed payments permanently due to poor recovery processes.
-
-## ✨ The Solution
-
-An automated payment recovery engine that:
-- **Categorizes failures** by type (expired card, insufficient funds, fraud flag, other)
-- **Applies smart retry logic** tailored to each failure reason
-- **Sends personalized notifications** to customers
-- **Tracks recovery metrics** in real-time
-- **Alerts on anomalies** (low recovery rates, high amounts at risk)
-
-## 📊 Results
-
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| **Recovery Rate** | 8-12% (manual) | 28-35% (automated) | **3x increase** |
-| **Time Spent** | 8 hrs/week | 15 min/week | **96% reduction** |
-| **Recovery Value** | Inconsistent | $12K-15K/month | **Consistent** |
-| **Detection Time** | Days | Real-time | **Same day** |
-
-## 🏗️ Architecture
-
-```
-Stripe Payment Failure
-         ↓
-[n8n Webhook Receiver]
-         ↓
-[Categorize Failure Reason]
-         ↓
-[Store in Supabase + Schedule Retry]
-         ↓
-    ┌────┴────┬─────────┐
-    ↓         ↓         ↓
-[Expired]  [Insufficient] [Fraud]
-  Card        Funds       Flag
-    ↓         ↓         ↓
-[Notify +  [Retry 3x  [Alert +
-Retry 1x   over 7d]   No Retry]
-in 24hrs]
-    ↓
-[Recovery Tracker]
-    ↓
-[Dashboard + Alerts]
-```
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- n8n instance (self-hosted or cloud)
-- Supabase account (free tier works)
-- Stripe account with API access
-- SMTP email service (Gmail, SendGrid, etc.)
-
-### Installation
-
-1. **Clone this repository**
-```bash
-git clone https://github.com/yourusername/failed-payment-recovery-engine.git
-cd failed-payment-recovery-engine
-```
-
-2. **Set up Supabase database**
-```bash
-# Run the SQL schema in your Supabase SQL editor
-cat database/schema.sql | supabase db execute
-```
-
-3. **Import n8n workflows**
-```bash
-# Import each workflow JSON file into your n8n instance
-# Import order:
-# 1. 1-webhook-receiver.json
-# 2. 2-process-failed-payment.json
-# 3. 3-send-email.json
-# 4. 4-retry-scheduler.json
-# 5. 5-daily-report.json
-```
-
-4. **Configure environment variables in n8n**
-```bash
-STRIPE_WEBHOOK_SECRET=whsec_xxxxx
-STRIPE_SECRET_KEY=sk_test_xxxxx
-N8N_HOST=https://your-n8n-instance.com
-SLACK_ALERT_CHANNEL=#payment-alerts (optional)
-REPORT_EMAIL=your-email@company.com
-DASHBOARD_URL=https://your-dashboard.com (optional)
-```
-
-5. **Set up Stripe webhook**
-- Go to Stripe Dashboard → Developers → Webhooks → Add endpoint
-- Endpoint URL: `https://your-n8n-instance.com/webhook/stripe-payment-failed`
-- Events to send: `payment_intent.payment_failed`, `invoice.payment_failed`, `charge.failed`
-- Copy the signing secret → Add to n8n environment variables
-
-6. **Test the system**
-```bash
-# Use Stripe's test mode to trigger payment failures
-# Watch the workflows execute in n8n
-# Verify data appears in Supabase
-```
-
-## 📁 Project Structure
-
-```
-failed-payment-recovery-engine/
-├── database/
-│   ├── schema.sql              # Supabase database schema
-│   └── sample-data.sql         # Test data for development
-├── n8n-workflows/
-│   ├── 1-webhook-receiver.json
-│   ├── 2-process-failed-payment.json
-│   ├── 3-send-email.json
-│   ├── 4-retry-scheduler.json
-│   └── 5-daily-report.json
-├── email-templates/
-│   ├── expired-card.html
-│   ├── insufficient-funds.html
-│   └── fraud-alert.html
-├── docs/
-│   ├── INSTALLATION.md
-│   ├── CONFIGURATION.md
-│   ├── TESTING.md
-│   └── TROUBLESHOOTING.md
-├── tests/
-│   └── test-data/
-│       └── sample-webhooks.json
-└── README.md
-```
-
-## 🔧 Configuration
-
-### Retry Strategies
-
-The system uses different retry strategies based on failure type:
-
-**Expired Card:**
-- Retries: 1x
-- Timing: 24 hours after failure
-- Notification: Immediate email asking customer to update card
-
-**Insufficient Funds:**
-- Retries: 3x
-- Timing: 2 days, 5 days, 7 days (strategic timing after payday)
-- Notification: Friendly reminder about payment
-
-**Fraud Flag:**
-- Retries: 0 (no automatic retry)
-- Action: Immediate alert to finance team for manual review
-
-**Other Failures:**
-- Retries: 1x
-- Timing: 3 days after failure
-- Notification: Generic payment failure notice
-
-### Customization
-
-You can customize retry strategies in the workflow:
-1. Open `2-process-failed-payment.json` in n8n
-2. Navigate to "Set Retry Strategy" node
-3. Modify `retry_schedule` array for each failure category
-4. Save and activate workflow
-
-## 📧 Email Templates
-
-The system includes pre-built email templates:
-
-- **Expired Card Template:** Professional, urgent, with clear CTA to update payment method
-- **Insufficient Funds Template:** Empathetic, helpful, with payment options
-- **Fraud Alert Template:** Security-focused for finance team
-
-Customize templates in `/email-templates/` directory.
-
-## 📊 Dashboard & Reporting
-
-### Daily Report (9am automatic)
-
-Includes:
-- Yesterday's failures by category
-- Recovery rate by category
-- Total amount at risk
-- Pending retries
-- Performance trends
-
-### Real-Time Alerts
-
-Automatic Slack/email alerts when:
-- Recovery rate drops below 20%
-- Amount at risk exceeds $10,000
-- Fraud flags detected
-- System errors occur
-
-## 🧪 Testing
-
-### Test with Stripe Test Mode
-
-```bash
-# 1. Use Stripe test cards to trigger failures
-# Expired card: 4000000000000069
-# Insufficient funds: 4000000000009995
-# Fraud flag: 4100000000000019
-
-# 2. Trigger test webhooks from Stripe Dashboard
-# 3. Monitor workflow execution in n8n
-# 4. Verify data in Supabase tables
-# 5. Check email notifications sent
-```
-
-See [TESTING.md](docs/TESTING.md) for comprehensive testing guide.
-
-## 🔒 Security
-
-- All Stripe webhooks are signature-verified
-- Supabase Row Level Security (RLS) enabled
-- Environment variables for sensitive data
-- API credentials stored in n8n credential manager
-- HTTPS required for all endpoints
-
-## 📈 Performance
-
-- **Webhook response:** < 200ms
-- **Retry scheduling:** Real-time
-- **Daily report:** < 5 seconds
-- **Database queries:** Optimized with indexes
-- **Email delivery:** Asynchronous (doesn't block workflow)
-
-## 🛠️ Tech Stack
-
-- **Workflow Engine:** n8n (v1.0+)
-- **Database:** Supabase (PostgreSQL)
-- **Payment Processor:** Stripe API
-- **Email:** SMTP (Gmail, SendGrid, etc.)
-- **Alerts:** Slack API (optional)
-- **Hosting:** Self-hosted or n8n cloud
-
-## 📚 Documentation
-
-- [Installation Guide](docs/INSTALLATION.md) - Step-by-step setup
-- [Configuration Guide](docs/CONFIGURATION.md) - Customize for your needs
-- [Testing Guide](docs/TESTING.md) - Test thoroughly before production
-- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and fixes
-
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- Built as part of the 30-Day Financial Automation Build Challenge
-- Inspired by real-world payment recovery challenges in SaaS businesses
-- Thanks to the n8n and Supabase communities
-
-## 💬 Support
-
-- **Issues:** [GitHub Issues](https://github.com/Etherlabs-dev/payment_recovery_engine/issues)
-- **Email:** ethercess@proton.me
-- **Twitter:** [@ChukwuAugustus](https://x.com/ChukwuAugustus)
-
-## 🔗 Related Projects
-
-- [Revenue Leakage Detector](https://github.com/Etherlabs-dev/revenue_leakage_system) - Find lost revenue automatically
+It is **not presented as a verified client deployment**. Recovery-rate, revenue and time-savings figures must be treated as modeled or simulated unless a reproducible benchmark or production evidence is attached.
 
 ---
 
-**Built with ❤️ by [Ugo Chukwu]** | [Website](https://dev.to/etherlabsdev) | [LinkedIn](https://www.linkedin.com/in/ugo-chukwu/) | [X(formerly Twitter)](https://x.com/ChukwuAugustus)
+## Problem
 
-*If this project helped you recover failed payments, give it a ⭐️!*
+Recurring-payment failures create avoidable churn and lost revenue, but a reliable recovery system has to do more than retry every card on a fixed schedule.
+
+The system needs to distinguish failure types, avoid unsafe retries, preserve idempotency, respect provider limits, and make every action auditable.
+
+---
+
+## System flow
+
+```text
+Stripe payment failure
+        ↓
+webhook intake
+        ↓
+verify + persist event
+        ↓
+classify failure reason
+        ↓
+policy / retry strategy
+   ┌────┼─────────────┐
+   ↓    ↓             ↓
+expired insufficient fraud/security
+card    funds        signal
+   ↓    ↓             ↓
+notify  scheduled    manual review /
+user    retries      no automatic retry
+   └────┴─────────────┘
+        ↓
+recovery tracking
+        ↓
+metrics + alerts
+```
+
+---
+
+## Repository artifacts
+
+The repository contains:
+
+- database schema and sample data;
+- n8n workflow exports;
+- customer email templates;
+- installation/testing documentation;
+- test webhook/sample data;
+- contribution and licensing files.
+
+The `tests/` directory currently contains test data rather than a substantive automated test suite. That distinction is important: test fixtures are **not the same as executable regression coverage**.
+
+---
+
+## Recovery policy represented in the reference design
+
+The existing workflow design uses different policies by failure class rather than a universal retry loop.
+
+### Expired / invalid payment method
+- customer notification;
+- limited retry after the customer has had time to update the payment method.
+
+### Insufficient funds
+- staged retries across a bounded time window;
+- customer reminders;
+- stop conditions after the configured retry budget is exhausted.
+
+### Fraud/security signal
+- no blind automatic retry;
+- escalation/manual review path.
+
+### Other failures
+- conservative retry policy with explicit limits.
+
+These policies are reference defaults, not universal payment-network rules. A production implementation should map provider-specific decline codes into a reviewed policy table.
+
+---
+
+## Evidence standard
+
+| Claim | Evidence status |
+|---|---|
+| Workflow artifacts exist | **Implemented** |
+| Database/schema artifacts exist | **Implemented** |
+| Failure categories and retry-policy design exist | **Implemented** |
+| Test webhook fixtures exist | **Synthetic / Demonstration** |
+| Automated regression suite | **Not yet established** |
+| 28–35% recovery rate | **Not verified by this repo** |
+| 3× recovery improvement | **Not verified by this repo** |
+| $12K–15K/month recovered | **Not verified by this repo** |
+| 96% time reduction | **Not verified by this repo** |
+| Production SLA/throughput | **Not claimed** |
+
+See [`docs/EVIDENCE.md`](./docs/EVIDENCE.md).
+
+---
+
+## Reliability requirements
+
+A production payment-recovery service must be safe under retries, duplicate provider events, process restarts and changing customer state.
+
+Key controls include:
+
+- Stripe webhook signature verification;
+- unique event/idempotency keys;
+- durable retry state;
+- duplicate-event suppression;
+- bounded retry budgets;
+- provider decline-code mapping;
+- stop conditions after successful recovery/cancellation;
+- concurrency protection so two retries cannot race;
+- structured audit logs;
+- customer-notification deduplication;
+- rate-limit handling;
+- dead-letter / failed-event recovery;
+- explicit manual-review paths for security signals.
+
+See [`docs/RELIABILITY.md`](./docs/RELIABILITY.md).
+
+---
+
+## Quick start
+
+### Prerequisites
+
+- n8n
+- Supabase/PostgreSQL
+- Stripe test-mode account
+- email provider; Slack optional
+
+### 1. Clone
+
+```bash
+git clone https://github.com/Etherlabs-dev/payment_recovery_engine.git
+cd payment_recovery_engine
+```
+
+### 2. Create the database
+
+Use the schema under `database/` and load sample data only for testing/demo purposes.
+
+### 3. Import workflows
+
+Import the workflow JSON files from `n8n-workflows/` and configure credentials through n8n rather than hardcoding secrets.
+
+### 4. Test safely
+
+Use Stripe **test mode** and the repository's sample webhook fixtures. Do not use live payment credentials until the implementation has passed idempotency and retry-safety testing.
+
+---
+
+## What should be strengthened in the portfolio version
+
+The current repository is workflow-heavy. To demonstrate senior financial-systems engineering more clearly, the next pass should move the deterministic payment-recovery policy into independently testable code.
+
+A stronger architecture would use:
+
+```text
+provider webhook
+      ↓
+validated event adapter
+      ↓
+recovery policy engine  ← unit-tested Python
+      ↓
+state/retry scheduler
+      ↓
+orchestration / notifications (n8n)
+```
+
+The policy engine should accept normalized failure data and return an explicit action plan such as:
+
+```text
+classification
+retry_allowed
+next_retry_at
+max_attempts
+customer_notification
+manual_review_required
+reason
+```
+
+That creates a clear separation between **business rules** and **workflow orchestration**.
+
+---
+
+## Testing target
+
+The upgrade should add executable tests for at least:
+
+- webhook-signature validation;
+- duplicate event delivery;
+- expired-card classification;
+- insufficient-funds retry schedule;
+- fraud/security no-retry behavior;
+- successful recovery cancelling future retries;
+- retry-budget exhaustion;
+- notification deduplication;
+- malformed event payload;
+- concurrent/replayed event handling.
+
+---
+
+## Limitations
+
+- Existing result numbers in the previous README were not backed by a reproducible client evidence package in this repository.
+- `docs/CONFIGURATION.md` and `docs/TROUBLESHOOTING.md` are currently placeholder files and need substantive content.
+- Existing tests are primarily fixture/sample data, not automated assertions.
+- Provider decline semantics change and must be validated against current Stripe documentation before live deployment.
+- Email and retry behavior must respect the client's billing policy, customer terms and jurisdiction.
+
+---
+
+## License
+
+MIT. See [`LICENSE`](./LICENSE).
+
+---
+
+Built by **Ugo Chukwu / Etherlabs** as a payments and revenue-recovery reference implementation.
