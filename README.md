@@ -1,295 +1,110 @@
 # Payment Recovery Engine
 
-**Automated payment failure recovery system built with n8n + Supabase**
+> Tested reference implementation for deterministic payment-failure classification, bounded retry policy, idempotent state transitions, and n8n operations.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![n8n](https://img.shields.io/badge/n8n-v1.0+-orange.svg)
-![Supabase](https://img.shields.io/badge/supabase-enabled-green.svg)
+**Status:** Validated reference implementation — not a production or client deployment
+**Stack:** Python 3.11 · FastAPI · PostgreSQL 16 · n8n · Stripe test mode · Docker
 
-> Recover 20-30% more failed payments automatically with intelligent retry strategies based on failure type.
+This repository demonstrates the safety boundaries of a recurring-payment recovery system. It does not claim a recovery rate, revenue outcome, time saving, production SLA, or client result.
 
-## 🎯 The Problem
+## Architecture
 
-5-10% of recurring payments fail every month. Most companies retry once (wrong approach) or manually chase customers (doesn't scale). Each failed payment means:
-- Lost MRR
-- Potential churn
-- Wasted manual effort
-- Poor customer experience
-
-**Result:** Companies lose 8-12% of failed payments permanently due to poor recovery processes.
-
-## ✨ The Solution
-
-An automated payment recovery engine that:
-- **Categorizes failures** by type (expired card, insufficient funds, fraud flag, other)
-- **Applies smart retry logic** tailored to each failure reason
-- **Sends personalized notifications** to customers
-- **Tracks recovery metrics** in real-time
-- **Alerts on anomalies** (low recovery rates, high amounts at risk)
-
-## 📊 Results
-
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| **Recovery Rate** | 8-12% (manual) | 28-35% (automated) | **3x increase** |
-| **Time Spent** | 8 hrs/week | 15 min/week | **96% reduction** |
-| **Recovery Value** | Inconsistent | $12K-15K/month | **Consistent** |
-| **Detection Time** | Days | Real-time | **Same day** |
-
-## 🏗️ Architecture
-
-```
-Stripe Payment Failure
-         ↓
-[n8n Webhook Receiver]
-         ↓
-[Categorize Failure Reason]
-         ↓
-[Store in Supabase + Schedule Retry]
-         ↓
-    ┌────┴────┬─────────┐
-    ↓         ↓         ↓
-[Expired]  [Insufficient] [Fraud]
-  Card        Funds       Flag
-    ↓         ↓         ↓
-[Notify +  [Retry 3x  [Alert +
-Retry 1x   over 7d]   No Retry]
-in 24hrs]
-    ↓
-[Recovery Tracker]
-    ↓
-[Dashboard + Alerts]
+```text
+Stripe webhook (exact raw bytes)
+        ↓
+Python ingress: signature verification + provider normalization
+        ↓
+deterministic policy + state transition
+        ↓
+PostgreSQL event / retry / notification ledgers
+        ↓
+n8n: schedules, provider calls, email, operational reports
 ```
 
-## 🚀 Quick Start
+Python owns business rules. n8n remains useful for orchestration and credentials, but does not classify declines or calculate retry schedules. See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
-### Prerequisites
+## Implemented and tested
 
-- n8n instance (self-hosted or cloud)
-- Supabase account (free tier works)
-- Stripe account with API access
-- SMTP email service (Gmail, SendGrid, etc.)
+- exact-raw-body Stripe HMAC verification, multiple `v1` signatures, and timestamp tolerance;
+- provider-code normalization separated from policy;
+- explicit decisions containing retry permission, next retry, budget, notification, manual review, reason, and policy version;
+- bounded schedules for insufficient-funds and temporary-processing failures;
+- no unattended retry for expired/invalid methods, authentication, security/fraud, hard declines, or unknown codes;
+- duplicate-event and notification suppression;
+- terminal recovery/cancellation states that clear future retries;
+- thread-safe reference transitions for concurrent/replayed events;
+- PostgreSQL atomic/reclaimable retry leases with `FOR UPDATE SKIP LOCKED`, unique idempotency keys, and optimistic terminal updates;
+- inactive, credential-free n8n imports for internal intake, persistence, notifications, retry work, and reporting;
+- Python, artifact, service, concurrency, and PostgreSQL integration tests;
+- Ruff, GitHub Actions, Docker, and Docker Compose reproducibility.
 
-### Installation
+The in-memory `RecoveryStore` is a testable state-machine reference. Production persistence belongs in PostgreSQL; it must not be replaced with process memory.
 
-1. **Clone this repository**
-```bash
-git clone https://github.com/yourusername/failed-payment-recovery-engine.git
-cd failed-payment-recovery-engine
-```
+## Conservative policy defaults
 
-2. **Set up Supabase database**
-```bash
-# Run the SQL schema in your Supabase SQL editor
-cat database/schema.sql | supabase db execute
-```
+| Normalized category | Automatic retry | Default action |
+|---|---:|---|
+| Insufficient funds | Up to 3 | 48h, 120h, then 168h after each observed failure |
+| Temporary processing | Up to 3 | 1h, 6h, then 24h |
+| Expired/invalid payment method | No | Notify for secure payment-method update |
+| Authentication required | No | Request customer authentication |
+| Security/fraud signal | No | Internal manual review; do not disclose provider signal |
+| Hard decline / unknown | No | Manual review or customer action |
 
-3. **Import n8n workflows**
-```bash
-# Import each workflow JSON file into your n8n instance
-# Import order:
-# 1. 1-webhook-receiver.json
-# 2. 2-process-failed-payment.json
-# 3. 3-send-email.json
-# 4. 4-retry-scheduler.json
-# 5. 5-daily-report.json
-```
+These are repository policy choices, not universal network rules. Validate them against contracts, jurisdiction, customer terms, and current provider guidance before deployment.
 
-4. **Configure environment variables in n8n**
-```bash
-STRIPE_WEBHOOK_SECRET=whsec_xxxxx
-STRIPE_SECRET_KEY=sk_test_xxxxx
-N8N_HOST=https://your-n8n-instance.com
-SLACK_ALERT_CHANNEL=#payment-alerts (optional)
-REPORT_EMAIL=your-email@company.com
-DASHBOARD_URL=https://your-dashboard.com (optional)
-```
-
-5. **Set up Stripe webhook**
-- Go to Stripe Dashboard → Developers → Webhooks → Add endpoint
-- Endpoint URL: `https://your-n8n-instance.com/webhook/stripe-payment-failed`
-- Events to send: `payment_intent.payment_failed`, `invoice.payment_failed`, `charge.failed`
-- Copy the signing secret → Add to n8n environment variables
-
-6. **Test the system**
-```bash
-# Use Stripe's test mode to trigger payment failures
-# Watch the workflows execute in n8n
-# Verify data appears in Supabase
-```
-
-## 📁 Project Structure
-
-```
-failed-payment-recovery-engine/
-├── database/
-│   ├── schema.sql              # Supabase database schema
-│   └── sample-data.sql         # Test data for development
-├── n8n-workflows/
-│   ├── 1-webhook-receiver.json
-│   ├── 2-process-failed-payment.json
-│   ├── 3-send-email.json
-│   ├── 4-retry-scheduler.json
-│   └── 5-daily-report.json
-├── email-templates/
-│   ├── expired-card.html
-│   ├── insufficient-funds.html
-│   └── fraud-alert.html
-├── docs/
-│   ├── INSTALLATION.md
-│   ├── CONFIGURATION.md
-│   ├── TESTING.md
-│   └── TROUBLESHOOTING.md
-├── tests/
-│   └── test-data/
-│       └── sample-webhooks.json
-└── README.md
-```
-
-## 🔧 Configuration
-
-### Retry Strategies
-
-The system uses different retry strategies based on failure type:
-
-**Expired Card:**
-- Retries: 1x
-- Timing: 24 hours after failure
-- Notification: Immediate email asking customer to update card
-
-**Insufficient Funds:**
-- Retries: 3x
-- Timing: 2 days, 5 days, 7 days (strategic timing after payday)
-- Notification: Friendly reminder about payment
-
-**Fraud Flag:**
-- Retries: 0 (no automatic retry)
-- Action: Immediate alert to finance team for manual review
-
-**Other Failures:**
-- Retries: 1x
-- Timing: 3 days after failure
-- Notification: Generic payment failure notice
-
-### Customization
-
-You can customize retry strategies in the workflow:
-1. Open `2-process-failed-payment.json` in n8n
-2. Navigate to "Set Retry Strategy" node
-3. Modify `retry_schedule` array for each failure category
-4. Save and activate workflow
-
-## 📧 Email Templates
-
-The system includes pre-built email templates:
-
-- **Expired Card Template:** Professional, urgent, with clear CTA to update payment method
-- **Insufficient Funds Template:** Empathetic, helpful, with payment options
-- **Fraud Alert Template:** Security-focused for finance team
-
-Customize templates in `/email-templates/` directory.
-
-## 📊 Dashboard & Reporting
-
-### Daily Report (9am automatic)
-
-Includes:
-- Yesterday's failures by category
-- Recovery rate by category
-- Total amount at risk
-- Pending retries
-- Performance trends
-
-### Real-Time Alerts
-
-Automatic Slack/email alerts when:
-- Recovery rate drops below 20%
-- Amount at risk exceeds $10,000
-- Fraud flags detected
-- System errors occur
-
-## 🧪 Testing
-
-### Test with Stripe Test Mode
+## Quick verification
 
 ```bash
-# 1. Use Stripe test cards to trigger failures
-# Expired card: 4000000000000069
-# Insufficient funds: 4000000000009995
-# Fraud flag: 4100000000000019
-
-# 2. Trigger test webhooks from Stripe Dashboard
-# 3. Monitor workflow execution in n8n
-# 4. Verify data in Supabase tables
-# 5. Check email notifications sent
+python3.11 -m venv .venv
+.venv/bin/python -m pip install '.[dev]'
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+.venv/bin/pytest
 ```
 
-See [TESTING.md](docs/TESTING.md) for comprehensive testing guide.
+Run Python plus a disposable PostgreSQL 16 database:
 
-## 🔒 Security
+```bash
+docker compose up --build --abort-on-container-exit --exit-code-from tests
+```
 
-- All Stripe webhooks are signature-verified
-- Supabase Row Level Security (RLS) enabled
-- Environment variables for sensitive data
-- API credentials stored in n8n credential manager
-- HTTPS required for all endpoints
+Run the service locally:
 
-## 📈 Performance
+```bash
+export STRIPE_WEBHOOK_SECRET=whsec_from_a_test_mode_endpoint
+.venv/bin/python -m payment_recovery
+```
 
-- **Webhook response:** < 200ms
-- **Retry scheduling:** Real-time
-- **Daily report:** < 5 seconds
-- **Database queries:** Optimized with indexes
-- **Email delivery:** Asynchronous (doesn't block workflow)
+Full configuration and test-mode instructions are in [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) and [`docs/TESTING.md`](./docs/TESTING.md).
 
-## 🛠️ Tech Stack
+## Stripe behavior validated for this pass
 
-- **Workflow Engine:** n8n (v1.0+)
-- **Database:** Supabase (PostgreSQL)
-- **Payment Processor:** Stripe API
-- **Email:** SMTP (Gmail, SendGrid, etc.)
-- **Alerts:** Slack API (optional)
-- **Hosting:** Self-hosted or n8n cloud
+The implementation was checked against current Stripe documentation for [webhook signatures](https://docs.stripe.com/webhooks/signature), [decline codes](https://docs.stripe.com/declines/codes), and [test-mode payment methods](https://docs.stripe.com/testing?testing-method=payment-methods). Notably, `do_not_honor` is an unspecified issuer decline, not proof of fraud; `fraudulent`, `lost_card`, and `stolen_card` are security-sensitive and are not automatically retried here.
 
-## 📚 Documentation
+## Evidence status
 
-- [Installation Guide](docs/INSTALLATION.md) - Step-by-step setup
-- [Configuration Guide](docs/CONFIGURATION.md) - Customize for your needs
-- [Testing Guide](docs/TESTING.md) - Test thoroughly before production
-- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and fixes
+| Claim | Evidence |
+|---|---|
+| Deterministic policy and state machine | **Implemented and tested** |
+| PostgreSQL schema and retry claim | **Executed and tested on PostgreSQL 16** |
+| n8n workflow artifacts | **Implemented; static import-contract tested** |
+| Stripe test-mode semantics | **Checked against current official documentation** |
+| Synthetic recovery benchmark | **Not performed** |
+| Production/client outcomes | **Not established** |
+| Historical 28–35%, 3×, or dollar claims | **Not reproduced and not claimed** |
 
-## 🤝 Contributing
+See [`docs/EVIDENCE.md`](./docs/EVIDENCE.md) for the claim policy and [`docs/RELIABILITY.md`](./docs/RELIABILITY.md) for remaining deployment controls.
 
-Contributions are welcome! Please:
+## Limitations
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+- No live Stripe endpoint or customer billing environment was exercised.
+- n8n JSON structure and safety contracts are automated; an authenticated n8n import/execution remains deployment acceptance work.
+- The service's reference in-memory store is intentionally non-durable; a deployed adapter must commit the verified event and state transition in PostgreSQL before acknowledging work.
+- No synthetic outcome simulation was added because policy behavior can be tested directly without inventing a recovery probability.
 
-## 📄 License
+## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT. See [`LICENSE`](./LICENSE).
 
-## 🙏 Acknowledgments
-
-- Built as part of the 30-Day Financial Automation Build Challenge
-- Inspired by real-world payment recovery challenges in SaaS businesses
-- Thanks to the n8n and Supabase communities
-
-## 💬 Support
-
-- **Issues:** [GitHub Issues](https://github.com/Etherlabs-dev/payment_recovery_engine/issues)
-- **Email:** ethercess@proton.me
-- **Twitter:** [@ChukwuAugustus](https://x.com/ChukwuAugustus)
-
-## 🔗 Related Projects
-
-- [Revenue Leakage Detector](https://github.com/Etherlabs-dev/revenue_leakage_system) - Find lost revenue automatically
-
----
-
-**Built with ❤️ by [Ugo Chukwu]** | [Website](https://dev.to/etherlabsdev) | [LinkedIn](https://www.linkedin.com/in/ugo-chukwu/) | [X(formerly Twitter)](https://x.com/ChukwuAugustus)
-
-*If this project helped you recover failed payments, give it a ⭐️!*
+Built by **Ugo Chukwu / Etherlabs**.
