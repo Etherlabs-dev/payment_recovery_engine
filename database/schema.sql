@@ -1,120 +1,155 @@
-🗄 Supabase Schema
+BEGIN;
 
-Run this SQL in your Supabase project.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-Super prompt for building marke…
-
-<details> <summary><code>failed_payments</code></summary>
-CREATE TABLE failed_payments (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-
-  -- Stripe data
-  stripe_payment_intent_id TEXT UNIQUE NOT NULL,
-  stripe_customer_id TEXT NOT NULL,
-  stripe_subscription_id TEXT,
-
-  -- Customer info
-  customer_email TEXT NOT NULL,
-  customer_name TEXT,
-
-  -- Payment details
-  amount INTEGER NOT NULL, -- in cents
-  currency TEXT DEFAULT 'usd',
-
-  -- Failure details
-  failure_code TEXT NOT NULL,
-  failure_message TEXT,
-  failure_category TEXT NOT NULL, -- 'expired_card', 'insufficient_funds', 'fraud_flag', 'other'
-
-  -- Retry tracking
-  retry_count INTEGER DEFAULT 0,
-  max_retries INTEGER NOT NULL,
-  next_retry_at TIMESTAMPTZ,
-
-  -- Status
-  status TEXT DEFAULT 'pending', -- 'pending', 'retrying', 'recovered', 'failed', 'manual_review'
-  recovered_at TIMESTAMPTZ,
-
-  -- Metadata
-  metadata JSONB
+CREATE TABLE IF NOT EXISTS webhook_events (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider text NOT NULL CHECK (provider <> ''),
+    provider_event_id text NOT NULL CHECK (provider_event_id <> ''),
+    event_type text NOT NULL CHECK (event_type <> ''),
+    payload_sha256 text NOT NULL CHECK (payload_sha256 ~ '^[0-9a-f]{64}$'),
+    received_at timestamptz NOT NULL DEFAULT now(),
+    processed_at timestamptz,
+    processing_status text NOT NULL DEFAULT 'received'
+        CHECK (processing_status IN ('received', 'processed', 'rejected', 'failed')),
+    error_message text,
+    UNIQUE (provider, provider_event_id)
 );
 
-CREATE INDEX idx_failed_payments_status ON failed_payments(status);
-CREATE INDEX idx_failed_payments_next_retry
-  ON failed_payments(next_retry_at) WHERE status = 'pending';
-CREATE INDEX idx_failed_payments_customer
-  ON failed_payments(stripe_customer_id);
-
-</details> <details> <summary><code>retry_attempts</code></summary>
-CREATE TABLE retry_attempts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  failed_payment_id UUID REFERENCES failed_payments(id),
-
-  retry_number INTEGER NOT NULL,
-  attempted_at TIMESTAMPTZ DEFAULT NOW(),
-
-  success BOOLEAN,
-  stripe_charge_id TEXT,
-  failure_reason TEXT,
-
-  metadata JSONB
+CREATE TABLE IF NOT EXISTS recovery_cases (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider text NOT NULL DEFAULT 'stripe',
+    provider_payment_intent_id text NOT NULL CHECK (provider_payment_intent_id <> ''),
+    provider_customer_id text,
+    customer_email text,
+    amount_minor bigint NOT NULL CHECK (amount_minor >= 0),
+    currency text NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+    failure_category text NOT NULL CHECK (failure_category IN (
+        'insufficient_funds', 'invalid_payment_method', 'authentication_required',
+        'security_or_fraud', 'temporary_processing', 'hard_decline', 'unknown'
+    )),
+    provider_failure_code text NOT NULL,
+    status text NOT NULL CHECK (status IN (
+        'pending', 'attempting', 'action_required', 'manual_review', 'recovered', 'exhausted', 'cancelled'
+    )),
+    attempts_completed integer NOT NULL DEFAULT 0 CHECK (attempts_completed >= 0),
+    max_attempts integer NOT NULL CHECK (max_attempts >= 0),
+    next_retry_at timestamptz,
+    policy_version text NOT NULL,
+    version integer NOT NULL DEFAULT 1 CHECK (version > 0),
+    lease_owner text,
+    lease_expires_at timestamptz,
+    recovered_at timestamptz,
+    cancelled_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (provider, provider_payment_intent_id),
+    CHECK (attempts_completed <= max_attempts),
+    CHECK ((status IN ('recovered', 'cancelled', 'action_required', 'exhausted', 'manual_review') AND next_retry_at IS NULL)
+        OR status IN ('pending', 'attempting')),
+    CHECK ((status = 'recovered') = (recovered_at IS NOT NULL)),
+    CHECK ((status = 'cancelled') = (cancelled_at IS NOT NULL))
 );
 
-CREATE INDEX idx_retry_attempts_payment
-  ON retry_attempts(failed_payment_id);
+CREATE INDEX IF NOT EXISTS recovery_cases_due_idx
+    ON recovery_cases (next_retry_at)
+    WHERE status = 'pending';
 
-</details> <details> <summary><code>recovery_stats</code></summary>
-CREATE TABLE recovery_stats (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  date DATE DEFAULT CURRENT_DATE,
+CREATE INDEX IF NOT EXISTS recovery_cases_expired_lease_idx
+    ON recovery_cases (lease_expires_at)
+    WHERE status = 'attempting';
 
-  category TEXT NOT NULL,
-
-  total_failures INTEGER DEFAULT 0,
-  total_recovered INTEGER DEFAULT 0,
-  total_permanent_failed INTEGER DEFAULT 0,
-
-  amount_at_risk INTEGER DEFAULT 0,
-  amount_recovered INTEGER DEFAULT 0,
-  amount_lost INTEGER DEFAULT 0,
-
-  recovery_rate DECIMAL(5,2),
-
-  UNIQUE(date, category)
+CREATE TABLE IF NOT EXISTS retry_attempts (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    recovery_case_id uuid NOT NULL REFERENCES recovery_cases(id) ON DELETE CASCADE,
+    attempt_number integer NOT NULL CHECK (attempt_number > 0),
+    provider_idempotency_key text NOT NULL CHECK (provider_idempotency_key <> ''),
+    status text NOT NULL CHECK (status IN ('claimed', 'succeeded', 'failed', 'cancelled')),
+    provider_error_code text,
+    started_at timestamptz NOT NULL DEFAULT now(),
+    finished_at timestamptz,
+    UNIQUE (recovery_case_id, attempt_number),
+    UNIQUE (provider_idempotency_key)
 );
 
-</details> <details> <summary>RLS Policies (Service Role)</summary>
-ALTER TABLE failed_payments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE retry_attempts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE recovery_stats ENABLE ROW LEVEL SECURITY;
+CREATE TABLE IF NOT EXISTS notification_deliveries (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    recovery_case_id uuid NOT NULL REFERENCES recovery_cases(id) ON DELETE CASCADE,
+    notification_kind text NOT NULL CHECK (notification_kind <> ''),
+    delivery_status text NOT NULL DEFAULT 'claimed'
+        CHECK (delivery_status IN ('claimed', 'sent', 'failed', 'suppressed')),
+    provider_message_id text,
+    claimed_at timestamptz NOT NULL DEFAULT now(),
+    sent_at timestamptz,
+    UNIQUE (recovery_case_id, notification_kind)
+);
 
-CREATE POLICY "Enable all for service role" ON failed_payments
-  FOR ALL USING (auth.role() = 'service_role');
+CREATE TABLE IF NOT EXISTS recovery_transitions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    recovery_case_id uuid NOT NULL REFERENCES recovery_cases(id) ON DELETE CASCADE,
+    provider_event_id text NOT NULL,
+    from_status text,
+    to_status text NOT NULL,
+    occurred_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (recovery_case_id, provider_event_id)
+);
 
-CREATE POLICY "Enable all for service role" ON retry_attempts
-  FOR ALL USING (auth.role() = 'service_role');
+CREATE OR REPLACE FUNCTION claim_due_retries(
+    p_worker_id text,
+    p_limit integer DEFAULT 100,
+    p_lease_seconds integer DEFAULT 300
+)
+RETURNS SETOF recovery_cases
+LANGUAGE sql
+AS $$
+    WITH due AS (
+        SELECT id
+        FROM recovery_cases
+        WHERE (status = 'pending' OR (status = 'attempting' AND lease_expires_at < now()))
+          AND next_retry_at <= now()
+          AND attempts_completed < max_attempts
+        ORDER BY next_retry_at, id
+        FOR UPDATE SKIP LOCKED
+        LIMIT GREATEST(0, LEAST(p_limit, 1000))
+    )
+    UPDATE recovery_cases AS recovery
+       SET status = 'attempting',
+           lease_owner = p_worker_id,
+           lease_expires_at = now() + make_interval(secs => GREATEST(1, p_lease_seconds)),
+           version = recovery.version + 1,
+           updated_at = now()
+      FROM due
+     WHERE recovery.id = due.id
+    RETURNING recovery.*;
+$$;
 
-CREATE POLICY "Enable all for service role" ON recovery_stats
-  FOR ALL USING (auth.role() = 'service_role');
+CREATE OR REPLACE FUNCTION mark_recovery_terminal(
+    p_case_id uuid,
+    p_expected_version integer,
+    p_status text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF p_status NOT IN ('recovered', 'cancelled') THEN
+        RAISE EXCEPTION 'invalid terminal status: %', p_status;
+    END IF;
 
-</details>
-📊 Recovery Dashboard View (Optional but Recommended)
-CREATE VIEW recovery_dashboard AS
-SELECT
-  DATE_TRUNC('day', created_at) AS date,
-  failure_category,
-  COUNT(*) AS total_failures,
-  SUM(CASE WHEN status = 'recovered' THEN 1 ELSE 0 END) AS total_recovered,
-  SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS total_failed,
-  SUM(amount) FILTER (WHERE status IN ('pending', 'retrying')) AS amount_at_risk,
-  SUM(amount) FILTER (WHERE status = 'recovered') AS amount_recovered,
-  SUM(amount) FILTER (WHERE status = 'failed') AS amount_lost,
-  ROUND(
-    (SUM(CASE WHEN status = 'recovered' THEN 1 ELSE 0 END)::DECIMAL / COUNT(*)) * 100,
-    2
-  ) AS recovery_rate_percentage
-FROM failed_payments
-GROUP BY DATE_TRUNC('day', created_at), failure_category
-ORDER BY date DESC, failure_category;
+    UPDATE recovery_cases
+       SET status = p_status,
+           next_retry_at = NULL,
+           lease_owner = NULL,
+           lease_expires_at = NULL,
+           recovered_at = CASE WHEN p_status = 'recovered' THEN now() ELSE NULL END,
+           cancelled_at = CASE WHEN p_status = 'cancelled' THEN now() ELSE NULL END,
+           version = version + 1,
+           updated_at = now()
+     WHERE id = p_case_id
+       AND version = p_expected_version
+       AND status NOT IN ('recovered', 'cancelled');
+    RETURN FOUND;
+END;
+$$;
+
+COMMIT;

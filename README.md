@@ -1,230 +1,110 @@
 # Payment Recovery Engine
 
-> Reference implementation for classifying payment failures, applying policy-driven retry strategies, notifying customers, and tracking recovery operations.
+> Tested reference implementation for deterministic payment-failure classification, bounded retry policy, idempotent state transitions, and n8n operations.
 
-**Status:** Reference Implementation / Validation Candidate  
-**Domain:** Payments · Revenue Recovery · Finance Operations  
-**Stack:** n8n · Supabase/PostgreSQL · Stripe webhooks · Email/Slack
+**Status:** Validated reference implementation — not a production or client deployment
+**Stack:** Python 3.11 · FastAPI · PostgreSQL 16 · n8n · Stripe test mode · Docker
 
-This repository demonstrates the architecture of a failed-payment recovery system. It models how recurring-payment failures can move from a webhook event into classification, retry scheduling, customer communication, recovery tracking and operational alerting.
+This repository demonstrates the safety boundaries of a recurring-payment recovery system. It does not claim a recovery rate, revenue outcome, time saving, production SLA, or client result.
 
-It is **not presented as a verified client deployment**. Recovery-rate, revenue and time-savings figures must be treated as modeled or simulated unless a reproducible benchmark or production evidence is attached.
-
----
-
-## Problem
-
-Recurring-payment failures create avoidable churn and lost revenue, but a reliable recovery system has to do more than retry every card on a fixed schedule.
-
-The system needs to distinguish failure types, avoid unsafe retries, preserve idempotency, respect provider limits, and make every action auditable.
-
----
-
-## System flow
+## Architecture
 
 ```text
-Stripe payment failure
+Stripe webhook (exact raw bytes)
         ↓
-webhook intake
+Python ingress: signature verification + provider normalization
         ↓
-verify + persist event
+deterministic policy + state transition
         ↓
-classify failure reason
+PostgreSQL event / retry / notification ledgers
         ↓
-policy / retry strategy
-   ┌────┼─────────────┐
-   ↓    ↓             ↓
-expired insufficient fraud/security
-card    funds        signal
-   ↓    ↓             ↓
-notify  scheduled    manual review /
-user    retries      no automatic retry
-   └────┴─────────────┘
-        ↓
-recovery tracking
-        ↓
-metrics + alerts
+n8n: schedules, provider calls, email, operational reports
 ```
 
----
+Python owns business rules. n8n remains useful for orchestration and credentials, but does not classify declines or calculate retry schedules. See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
-## Repository artifacts
+## Implemented and tested
 
-The repository contains:
+- exact-raw-body Stripe HMAC verification, multiple `v1` signatures, and timestamp tolerance;
+- provider-code normalization separated from policy;
+- explicit decisions containing retry permission, next retry, budget, notification, manual review, reason, and policy version;
+- bounded schedules for insufficient-funds and temporary-processing failures;
+- no unattended retry for expired/invalid methods, authentication, security/fraud, hard declines, or unknown codes;
+- duplicate-event and notification suppression;
+- terminal recovery/cancellation states that clear future retries;
+- thread-safe reference transitions for concurrent/replayed events;
+- PostgreSQL atomic/reclaimable retry leases with `FOR UPDATE SKIP LOCKED`, unique idempotency keys, and optimistic terminal updates;
+- inactive, credential-free n8n imports for internal intake, persistence, notifications, retry work, and reporting;
+- Python, artifact, service, concurrency, and PostgreSQL integration tests;
+- Ruff, GitHub Actions, Docker, and Docker Compose reproducibility.
 
-- database schema and sample data;
-- n8n workflow exports;
-- customer email templates;
-- installation/testing documentation;
-- test webhook/sample data;
-- contribution and licensing files.
+The in-memory `RecoveryStore` is a testable state-machine reference. Production persistence belongs in PostgreSQL; it must not be replaced with process memory.
 
-The `tests/` directory currently contains test data rather than a substantive automated test suite. That distinction is important: test fixtures are **not the same as executable regression coverage**.
+## Conservative policy defaults
 
----
+| Normalized category | Automatic retry | Default action |
+|---|---:|---|
+| Insufficient funds | Up to 3 | 48h, 120h, then 168h after each observed failure |
+| Temporary processing | Up to 3 | 1h, 6h, then 24h |
+| Expired/invalid payment method | No | Notify for secure payment-method update |
+| Authentication required | No | Request customer authentication |
+| Security/fraud signal | No | Internal manual review; do not disclose provider signal |
+| Hard decline / unknown | No | Manual review or customer action |
 
-## Recovery policy represented in the reference design
+These are repository policy choices, not universal network rules. Validate them against contracts, jurisdiction, customer terms, and current provider guidance before deployment.
 
-The existing workflow design uses different policies by failure class rather than a universal retry loop.
-
-### Expired / invalid payment method
-- customer notification;
-- limited retry after the customer has had time to update the payment method.
-
-### Insufficient funds
-- staged retries across a bounded time window;
-- customer reminders;
-- stop conditions after the configured retry budget is exhausted.
-
-### Fraud/security signal
-- no blind automatic retry;
-- escalation/manual review path.
-
-### Other failures
-- conservative retry policy with explicit limits.
-
-These policies are reference defaults, not universal payment-network rules. A production implementation should map provider-specific decline codes into a reviewed policy table.
-
----
-
-## Evidence standard
-
-| Claim | Evidence status |
-|---|---|
-| Workflow artifacts exist | **Implemented** |
-| Database/schema artifacts exist | **Implemented** |
-| Failure categories and retry-policy design exist | **Implemented** |
-| Test webhook fixtures exist | **Synthetic / Demonstration** |
-| Automated regression suite | **Not yet established** |
-| 28–35% recovery rate | **Not verified by this repo** |
-| 3× recovery improvement | **Not verified by this repo** |
-| $12K–15K/month recovered | **Not verified by this repo** |
-| 96% time reduction | **Not verified by this repo** |
-| Production SLA/throughput | **Not claimed** |
-
-See [`docs/EVIDENCE.md`](./docs/EVIDENCE.md).
-
----
-
-## Reliability requirements
-
-A production payment-recovery service must be safe under retries, duplicate provider events, process restarts and changing customer state.
-
-Key controls include:
-
-- Stripe webhook signature verification;
-- unique event/idempotency keys;
-- durable retry state;
-- duplicate-event suppression;
-- bounded retry budgets;
-- provider decline-code mapping;
-- stop conditions after successful recovery/cancellation;
-- concurrency protection so two retries cannot race;
-- structured audit logs;
-- customer-notification deduplication;
-- rate-limit handling;
-- dead-letter / failed-event recovery;
-- explicit manual-review paths for security signals.
-
-See [`docs/RELIABILITY.md`](./docs/RELIABILITY.md).
-
----
-
-## Quick start
-
-### Prerequisites
-
-- n8n
-- Supabase/PostgreSQL
-- Stripe test-mode account
-- email provider; Slack optional
-
-### 1. Clone
+## Quick verification
 
 ```bash
-git clone https://github.com/Etherlabs-dev/payment_recovery_engine.git
-cd payment_recovery_engine
+python3.11 -m venv .venv
+.venv/bin/python -m pip install '.[dev]'
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+.venv/bin/pytest
 ```
 
-### 2. Create the database
+Run Python plus a disposable PostgreSQL 16 database:
 
-Use the schema under `database/` and load sample data only for testing/demo purposes.
-
-### 3. Import workflows
-
-Import the workflow JSON files from `n8n-workflows/` and configure credentials through n8n rather than hardcoding secrets.
-
-### 4. Test safely
-
-Use Stripe **test mode** and the repository's sample webhook fixtures. Do not use live payment credentials until the implementation has passed idempotency and retry-safety testing.
-
----
-
-## What should be strengthened in the portfolio version
-
-The current repository is workflow-heavy. To demonstrate senior financial-systems engineering more clearly, the next pass should move the deterministic payment-recovery policy into independently testable code.
-
-A stronger architecture would use:
-
-```text
-provider webhook
-      ↓
-validated event adapter
-      ↓
-recovery policy engine  ← unit-tested Python
-      ↓
-state/retry scheduler
-      ↓
-orchestration / notifications (n8n)
+```bash
+docker compose up --build --abort-on-container-exit --exit-code-from tests
 ```
 
-The policy engine should accept normalized failure data and return an explicit action plan such as:
+Run the service locally:
 
-```text
-classification
-retry_allowed
-next_retry_at
-max_attempts
-customer_notification
-manual_review_required
-reason
+```bash
+export STRIPE_WEBHOOK_SECRET=whsec_from_a_test_mode_endpoint
+.venv/bin/python -m payment_recovery
 ```
 
-That creates a clear separation between **business rules** and **workflow orchestration**.
+Full configuration and test-mode instructions are in [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) and [`docs/TESTING.md`](./docs/TESTING.md).
 
----
+## Stripe behavior validated for this pass
 
-## Testing target
+The implementation was checked against current Stripe documentation for [webhook signatures](https://docs.stripe.com/webhooks/signature), [decline codes](https://docs.stripe.com/declines/codes), and [test-mode payment methods](https://docs.stripe.com/testing?testing-method=payment-methods). Notably, `do_not_honor` is an unspecified issuer decline, not proof of fraud; `fraudulent`, `lost_card`, and `stolen_card` are security-sensitive and are not automatically retried here.
 
-The upgrade should add executable tests for at least:
+## Evidence status
 
-- webhook-signature validation;
-- duplicate event delivery;
-- expired-card classification;
-- insufficient-funds retry schedule;
-- fraud/security no-retry behavior;
-- successful recovery cancelling future retries;
-- retry-budget exhaustion;
-- notification deduplication;
-- malformed event payload;
-- concurrent/replayed event handling.
+| Claim | Evidence |
+|---|---|
+| Deterministic policy and state machine | **Implemented and tested** |
+| PostgreSQL schema and retry claim | **Executed and tested on PostgreSQL 16** |
+| n8n workflow artifacts | **Implemented; static import-contract tested** |
+| Stripe test-mode semantics | **Checked against current official documentation** |
+| Synthetic recovery benchmark | **Not performed** |
+| Production/client outcomes | **Not established** |
+| Historical 28–35%, 3×, or dollar claims | **Not reproduced and not claimed** |
 
----
+See [`docs/EVIDENCE.md`](./docs/EVIDENCE.md) for the claim policy and [`docs/RELIABILITY.md`](./docs/RELIABILITY.md) for remaining deployment controls.
 
 ## Limitations
 
-- Existing result numbers in the previous README were not backed by a reproducible client evidence package in this repository.
-- `docs/CONFIGURATION.md` and `docs/TROUBLESHOOTING.md` are currently placeholder files and need substantive content.
-- Existing tests are primarily fixture/sample data, not automated assertions.
-- Provider decline semantics change and must be validated against current Stripe documentation before live deployment.
-- Email and retry behavior must respect the client's billing policy, customer terms and jurisdiction.
-
----
+- No live Stripe endpoint or customer billing environment was exercised.
+- n8n JSON structure and safety contracts are automated; an authenticated n8n import/execution remains deployment acceptance work.
+- The service's reference in-memory store is intentionally non-durable; a deployed adapter must commit the verified event and state transition in PostgreSQL before acknowledging work.
+- No synthetic outcome simulation was added because policy behavior can be tested directly without inventing a recovery probability.
 
 ## License
 
 MIT. See [`LICENSE`](./LICENSE).
 
----
-
-Built by **Ugo Chukwu / Etherlabs** as a payments and revenue-recovery reference implementation.
+Built by **Ugo Chukwu / Etherlabs**.

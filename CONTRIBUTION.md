@@ -1,10 +1,13 @@
-🤝 Contributing
+# Contributing
 
-PRs, improvements, and additional billing providers (Paddle, Chargebee, Braintree, etc.) are welcome:
+Changes to failure mapping, retry budgets, schedules, state transitions, or customer messaging require executable tests and an evidence note. Keep provider adapters separate from the deterministic policy core, and keep financial policy out of n8n code nodes.
 
-Add new failure categories
+Before opening a pull request, run:
 
-Add support for more dunning channels (WhatsApp, SMS)
+```bash
+ruff check .
+ruff format --check .
+pytest
+```
 
-Improve dashboard & analytics
-
+Use Docker Compose when changing PostgreSQL behavior. Never commit populated environment files, credentials, real customer/payment data, or unsupported outcome claims. New billing providers should include official-semantics references, malformed-input cases, idempotency tests, and a clear manual-review policy.

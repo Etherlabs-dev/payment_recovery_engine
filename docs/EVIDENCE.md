@@ -18,13 +18,21 @@ This repository is a public reference implementation for payment-failure recover
 **Reference Implementation / Validation Candidate**
 
 ### Implemented
-- webhook-driven recovery workflow design;
-- payment-failure categorization flow;
-- retry scheduling concepts;
-- Supabase/PostgreSQL persistence artifacts;
-- email templates;
-- operational reporting/alerting workflow artifacts;
-- test-mode/sample webhook fixtures.
+- deterministic Python normalization, policy, signature, and state-machine modules;
+- executable Python, service, concurrency, artifact, and PostgreSQL tests;
+- atomic PostgreSQL retry claims, idempotency ledgers, and terminal version checks;
+- n8n orchestration artifacts with named credentials and no embedded business policy;
+- runtime email templates and synthetic database fixtures;
+- Python 3.11, Ruff, GitHub Actions, Docker, and Docker Compose configuration.
+
+### Executed in the engineering pass
+
+- complete automated suite in Python 3.11;
+- schema and integration assertions on PostgreSQL 16;
+- static import/contract validation for all five n8n JSON files;
+- secret-pattern and generated-artifact checks.
+
+This is test evidence, not production evidence.
 
 ### Not established by this repository alone
 - 28–35% recovery rate;

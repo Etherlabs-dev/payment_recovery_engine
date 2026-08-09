@@ -52,7 +52,7 @@ Use bounded retries with backoff and durable failed-event handling. A provider o
 
 Retry timestamps must be explicit, timezone-safe, and persisted. Do not rely solely on in-memory workflow state.
 
-## State-machine recommendation
+## Implemented state-machine contract
 
 A stronger implementation should model recovery state explicitly, for example:
 
@@ -69,7 +69,7 @@ ATTEMPTING
   └──→ EXHAUSTED
 ```
 
-Transitions should be validated rather than allowing arbitrary status updates.
+The Python reference store validates these transitions, and PostgreSQL provides durable uniqueness and optimistic terminal updates. A durable Python repository/outbox adapter is still required before production deployment.
 
 ## Observability target
 
